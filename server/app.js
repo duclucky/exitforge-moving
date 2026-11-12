@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { openDatabase, seed, users, resources } from './data.js';
-import { planMove, resourceConflicts, minutes, todayInZone, isMoveDate, suggestPlans } from '../shared/schedule.js';
+import { planMove, resourceConflicts, minutes, todayInZone, isMoveDate, suggestPlans, diagnosePlans } from '../shared/schedule.js';
 import { analyzeMove, surveyInput } from './survey.js';
 import { PayPal } from './paypal.js';
 import { fulfillmentFor, registerFulfillment } from './fulfillment.js';
@@ -111,12 +111,20 @@ export function createApp({ database = 'data/exitforge.sqlite', env = process.en
   });
   app.get('/api/workspace', (req,res) => {
     expire(); const active = db.prepare("SELECT * FROM holds WHERE status IN ('held','booked','needs_review')").all();
+    const fulfillmentByHold = new Map(active.filter(h => h.status === 'booked').map(h => [h.id, fulfillmentFor(db,h,env)]));
     const jobs = db.prepare('SELECT * FROM jobs ORDER BY rowid DESC').all().map(row => {
       const j = parse(row); const h = active.find(h => h.job === j.id);
-      const fulfillment=h?.status==='booked'?fulfillmentFor(db,h,env):null;
-      return { ...j, owner:row.owner, status:h ? (h.status === 'booked' ? (fulfillment.stage==='scheduled'?'booked':fulfillment.stage) : h.status === 'needs_review' ? 'needs_review' : 'reserved') : j.status==='cancelled'?'cancelled':'open' };
+      const fulfillment=fulfillmentByHold.get(h?.id);
+      return { ...j, ...fulfillment?.schedule?.windows, owner:row.owner, status:h ? (h.status === 'booked' ? (fulfillment.stage==='scheduled'?'booked':fulfillment.stage) : h.status === 'needs_review' ? 'needs_review' : 'reserved') : j.status==='cancelled'?'cancelled':'open' };
     });
     const offers = db.prepare('SELECT data FROM offers').all().map(parse).filter(o => req.user.role === 'provider' ? o.provider === req.user.id : jobs.some(j => j.id === o.jobId && j.owner === req.user.id));
+    const approvedStarts = new Map(active.flatMap(hold => {
+      const schedule = fulfillmentByHold.get(hold.id)?.schedule;
+      return schedule ? [[hold.offer, schedule.start]] : [];
+    }));
+    for (const offer of offers) {
+      if (approvedStarts.has(offer.id)) offer.start = approvedStarts.get(offer.id);
+    }
     const paymentHistory=req.user.role==='customer'?db.prepare("SELECT * FROM holds WHERE owner=? AND status='expired' AND paypal_order IS NOT NULL ORDER BY rowid DESC").all(req.user.id):[];
     // Closed assignments are private; preserve only an unselected mover's own quote/thread context.
     const visibleJobs=req.user.role==='customer'?jobs.filter(j=>j.owner===req.user.id):jobs.flatMap(j=>{
@@ -126,7 +134,7 @@ export function createApp({ database = 'data/exitforge.sqlite', env = process.en
       if(!hold)return[j];
       return[{id:j.id,title:j.title,date:j.date,size:j.size,budget:j.budget,status:j.status,owner:j.owner,createdAt:j.createdAt,restricted:true}];
     });
-    res.json({ user:req.user, users, conversations:conversationSummaries(db,req.user), jobs:visibleJobs, offers, resources:resources.filter(r=>req.user.role==='customer'||r.provider===req.user.id), allocations:allocations().filter(a=>req.user.role==='provider'?resources.some(r=>r.id===a.resourceId&&r.provider===req.user.id):true), holds:active.filter(h=>h.owner===req.user.id || offers.some(o=>o.id===h.offer)).map(h=>({...h,...(h.status==='booked'?{fulfillment:fulfillmentFor(db,h,env)}:{})})), paymentHistory });
+    res.json({ user:req.user, users, conversations:conversationSummaries(db,req.user), jobs:visibleJobs, offers, resources:resources.filter(r=>req.user.role==='customer'||r.provider===req.user.id), allocations:allocations().filter(a=>req.user.role==='provider'?resources.some(r=>r.id===a.resourceId&&r.provider===req.user.id):true), holds:active.filter(h=>h.owner===req.user.id || offers.some(o=>o.id===h.offer)).map(h=>({...h,...(h.status==='booked'?{fulfillment:fulfillmentByHold.get(h.id)}:{})})), paymentHistory });
   });
   app.post('/api/jobs', (req,res) => {
     if(req.user.role!=='customer')throw fail('Only customers can post moves.',403);
@@ -172,11 +180,21 @@ export function createApp({ database = 'data/exitforge.sqlite', env = process.en
     const movers=owned.filter(r=>r.kind==='mover'),teams=[];
     function combine(start,team){if(team.length===count){teams.push(team);return;}for(let i=start;i<movers.length;i++)combine(i+1,[...team,movers[i].id]);}
     combine(0,[]);
-    const busy=allocations(),candidates=[];
-    for(const truck of owned.filter(r=>r.kind==='truck'))for(const crew of teams)candidates.push(...suggestPlans(j,{...estimate,resources:[truck.id,...crew]},busy));
+    const now = new Date();
+    const notBefore = j.date === todayInZone(now)
+      ? Math.floor((now.getTime() - Date.parse(j.date + 'T00:00:00+07:00')) / 60000) + 1
+      : 0;
+    const teamOptions = owned.filter(r => r.kind === 'truck').flatMap(truck => teams.map(crew => [truck.id, ...crew]));
+    const busy = allocations();
+    const candidates = teamOptions.flatMap(resources => suggestPlans(j, { ...estimate, resources }, busy, 3, notBefore));
     candidates.sort((a,b)=>a.start.localeCompare(b.start));
-    const plans=candidates.filter((p,i)=>candidates.findIndex(q=>q.start===p.start)===i).slice(0,3);
-    res.json({plans,explanation:plans.length?'Based on your reviewed durations and crew size. Resource availability will be checked again on send and reservation.':'No feasible plan with these durations and crew size. Review building access, task estimates or the move date with the customer.'});
+    const plans = candidates.filter((p,i)=>candidates.findIndex(q=>q.start===p.start)===i).slice(0,3);
+    const explanation = 'Based on your reviewed durations and crew size. Resource availability will be checked again on send and reservation.';
+    if (plans.length) return res.json({ plans, explanation });
+
+    const { plan, diagnosis } = diagnosePlans(j, estimate, teamOptions, busy, notBefore);
+    if (plan) return res.json({ plans: [plan], explanation });
+    res.json({ plans, explanation: diagnosis.message, diagnosis });
   });
   app.post(['/api/survey','/api/extract'],async(req,res)=>{
     if(req.user.role!=='customer')throw fail('Only customers can analyze their move details.',403);
@@ -271,7 +289,7 @@ export function createApp({ database = 'data/exitforge.sqlite', env = process.en
       return ownHold(h.id,req.user);
     });res.json(result);
   });
-  registerFulfillment(app,{db,balance,atomic,job,env});
+  registerFulfillment(app,{db,balance,atomic,job,allocations,env});
   qr.registerPrivate(app);
   registerPayout(app,{db,paypal,atomic,env});
   registerMarketplace(app,{db,atomic,job,offer,expire,users});

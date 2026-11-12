@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {payoutFor} from './payout.js';
+import { bookingScheduleFor, registerScheduleChanges } from './schedule-change.js';
 
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const noteInput=z.object({note:z.string().trim().min(10,'Add a short explanation of at least 10 characters.').max(2000)});
@@ -17,10 +18,11 @@ export function fulfillmentFor(db,hold,env={}){
     operatorNote:row?.operator_note||'',customerNote:row?.customer_note||'',
     events:db.prepare('SELECT actor,action,note,created_at AS createdAt FROM work_events WHERE hold_id=? ORDER BY id').all(hold.id),
     payout:payoutFor(db,hold,env),
+    ...bookingScheduleFor(db,hold.id),
   };
 }
 
-export function registerFulfillment(app,{db,balance,atomic,job,env={}}){
+export function registerFulfillment(app,{db,balance,atomic,job,allocations,env={}}){
   function authorized(req,role){
     const hold=db.prepare('SELECT * FROM holds WHERE id=?').get(req.params.id);
     if(!hold||!hold.snapshot)throw fail('Booked move not found.',404);
@@ -35,6 +37,8 @@ export function registerFulfillment(app,{db,balance,atomic,job,env={}}){
   function event(hold,req,action,note=''){db.prepare('INSERT INTO work_events(hold_id,actor,action,note,created_at) VALUES (?,?,?,?,?)').run(hold.id,req.user.name,action,note,new Date().toISOString());}
   function receipt(hold){return{reservationId:hold.id,jobId:hold.job,title:job(hold.job).title,currency:'USD',environment:'PayPal Sandbox',depositCapture:hold.capture,...fulfillmentFor(db,hold,env),settlement:'Customer payments are collected by the platform test merchant. Provider settlement is tracked separately through PayPal Sandbox Payouts; queued batches do not prove receipt.'};}
 
+  registerScheduleChanges(app,{db,authorized,atomic,job,allocations,receipt,event});
+
   app.get('/api/holds/:id/receipt',(req,res)=>{
     const hold=authorized(req);
     if(req.query.download==='1')res.attachment(`ExitForge-receipt-${hold.id.slice(0,8)}.json`);
@@ -46,6 +50,7 @@ export function registerFulfillment(app,{db,balance,atomic,job,env={}}){
       ensure(hold);const current=fulfillmentFor(db,hold);
       if(current.stage==='in_progress')return;
       if(current.stage!=='scheduled')throw fail('Only a scheduled move can be started.',409);
+      if(current.scheduleChangePending)throw fail('Confirm the new schedule before starting the move.',409);
       db.prepare("UPDATE fulfillments SET stage='in_progress',started_at=? WHERE hold_id=?").run(new Date().toISOString(),hold.id);
       event(hold,req,'started');
     });res.json(receipt(hold));

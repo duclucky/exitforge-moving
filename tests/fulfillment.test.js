@@ -108,3 +108,66 @@ test('QR-created PayPal orders return directly to the same phone payment link',a
   assert.equal(sent.payment_source.paypal.experience_context.return_url,context.returnUrl);
   assert.equal(sent.payment_source.paypal.experience_context.cancel_url,context.cancelUrl);
 });
+
+const revisedAccess = {
+  pickupStart: '09:15', pickupEnd: '10:15', dropStart: '11:30', dropEnd: '12:30',
+  note: 'Building management confirmed the updated elevator times.',
+  confirmed: true, expectedChangeId: null,
+};
+
+test('schedule recovery requires both parties and preserves the captured deposit and quote', async t => {
+  const f = await fixture(t), url = f.path + '/schedule-change';
+  const booked = await f.customer(f.path + '/receipt');
+  const originalSnapshot = f.db.prepare('SELECT snapshot FROM holds WHERE id=?').get(f.h.id).snapshot;
+  assert.equal((await f.provider(url + '/request', revisedAccess)).status, 403);
+  const requested = await f.customer(url + '/request', revisedAccess);
+  assert.equal(requested.status, 200);
+  const change = requested.data.scheduleChange;
+  assert.equal(change.status, 'requested');
+  assert.equal((await f.provider(f.path + '/work/start', {})).status, 409);
+  assert.equal((await f.other(url + '/propose', { id: change.id, version: change.version, start: '09:15' })).status, 403);
+  const proposed = await f.provider(url + '/propose', { id: change.id, version: change.version, start: '09:15', price: 1 });
+  assert.equal(proposed.status, 200);
+  const approval = { id: change.id, version: proposed.data.scheduleChange.version };
+  assert.equal((await f.provider(url + '/approve', approval)).status, 403);
+  const approved = await f.customer(url + '/approve', approval);
+  assert.equal(approved.status, 200);
+  assert.equal(approved.data.schedule.start, '09:15');
+  assert.equal(approved.data.schedule.windows.dropEnd, '12:30');
+  assert.equal(approved.data.depositCapture, booked.data.depositCapture);
+  assert.equal(approved.data.balanceDue, 144.8);
+  assert.equal(f.orders.size, 1);
+  assert.equal(f.db.prepare('SELECT snapshot FROM holds WHERE id=?').get(f.h.id).snapshot, originalSnapshot);
+  assert.equal((await f.customer(url + '/approve', approval)).status, 200);
+  assert.equal(f.db.prepare("SELECT count(*) AS n FROM work_events WHERE hold_id=? AND action='schedule_changed'").get(f.h.id).n, 1);
+  const workspace = (await f.provider('/workspace')).data;
+  assert.equal(workspace.jobs.find(job => job.id === f.h.job).dropEnd, '12:30');
+  assert.equal(workspace.offers.find(offer => offer.id === f.h.offer).start, '09:15');
+  assert.deepEqual(workspace.allocations.filter(item => item.holdId === f.h.id).map(item => [item.start, item.end]), [[555,765],[555,765],[555,765]]);
+  await f.accept();
+  const order = (await f.customer(f.path + '/balance/paypal-order', {})).data;
+  assert.equal(f.orders.get(order.id).amount, 144.8);
+  assert.equal((await f.customer(f.path + '/balance/capture', {})).data.paidInFull, true);
+});
+
+test('schedule recovery rejects stale approvals and a new allocation conflict', async t => {
+  const f = await fixture(t), url = f.path + '/schedule-change';
+  const first = (await f.customer(url + '/request', revisedAccess)).data.scheduleChange;
+  const firstProposal = (await f.provider(url + '/propose', { id: first.id, version: first.version, start: '09:15' })).data.scheduleChange;
+  const second = (await f.customer(url + '/request', {...revisedAccess, dropEnd: '12:45', expectedChangeId: first.id })).data.scheduleChange;
+  assert.equal((await f.customer(url + '/approve', { id: first.id, version: firstProposal.version })).status, 409);
+  assert.equal((await f.provider(url + '/propose', { id: second.id, version: second.version, start: '09:00' })).status, 409);
+  const secondProposal = (await f.provider(url + '/propose', { id: second.id, version: second.version, start: '09:15' })).data.scheduleChange;
+  const day = (await f.provider('/workspace')).data.jobs.find(job => job.id === f.h.job).date;
+  f.db.prepare("INSERT INTO holds (id,job,offer,owner,expires,status) VALUES ('other-hold',?,?,?,?,'held')").run(f.h.job,f.h.offer,f.h.owner,Date.now()+600000);
+  f.db.prepare("INSERT INTO allocations VALUES ('new-conflict','other-hold',?,'gm-truck-1',740,770)").run(day);
+  assert.equal((await f.customer(url + '/approve', { id: second.id, version: secondProposal.version })).status, 409);
+  assert.equal(f.db.prepare('SELECT end FROM allocations WHERE hold_id=? LIMIT 1').get(f.h.id).end, 735);
+  assert.equal((await f.customer(f.path + '/receipt')).data.scheduleChange.status, 'proposed');
+});
+
+test('schedule recovery cannot change a move after work starts', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.provider(f.path + '/work/start', {})).status, 200);
+  assert.equal((await f.customer(f.path + '/schedule-change/request', revisedAccess)).status, 409);
+});

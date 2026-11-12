@@ -98,3 +98,51 @@ test('plan suggestions preserve reviewed estimates and exclude occupied resource
   const busy=[{date:f.j.date,resourceId:'gm-truck-1',start:360,end:1200}];assert.equal(suggestPlans(f.j,estimate,busy).length,0);
   assert.equal((await f.customer('/jobs/'+f.j.id+'/suggestions',estimate)).status,403);
 });
+
+test('plan diagnosis quantifies the missing access time and previews a hypothetical window',async t=>{
+  const f=await fixture(t);
+  const created=await f.customer('/jobs',{...f.j,title:'Destination access needs more time',pickupEnd:'09:45',dropStart:'11:30',dropEnd:'12:00'});
+  assert.equal(created.status,201);
+  const job=created.data,estimate={...f.o,loadMinutes:30};
+  const result=await f.mover('/jobs/'+job.id+'/suggestions',estimate);
+  assert.equal(result.status,200);
+  assert.deepEqual(result.data.plans,[]);
+  const {diagnosis}=result.data;
+  assert.equal(diagnosis.code,'access');
+  assert.deepEqual(diagnosis.changes,[{side:'drop',confirmedEnd:'12:00',requestedEnd:'12:30',minutes:30}]);
+  assert.equal(planMove(job,diagnosis.preview).valid,false);
+  assert.equal(planMove({...job,dropEnd:'12:30'},diagnosis.preview).valid,true);
+  assert.equal(diagnosis.preview.price,estimate.price);
+  assert.equal(diagnosis.preview.unloadMinutes,estimate.unloadMinutes);
+  assert.equal((await f.mover('/jobs/'+job.id+'/offers',diagnosis.preview)).status,409);
+  assert.equal((await f.customer('/workspace')).data.jobs.find(row=>row.id===job.id).dropEnd,'12:00');
+});
+test('plan diagnosis distinguishes booked resources from building access limits',async t=>{
+  const f=await fixture(t),held=await f.hold();
+  assert.equal(held.status,'held');
+  const {data:job}=await f.customer('/jobs',{...f.j,title:'Crew busy at a feasible time'});
+  const result=await f.mover('/jobs/'+job.id+'/suggestions',f.o);
+  assert.equal(result.status,200);
+  assert.deepEqual(result.data.plans,[]);
+  assert.equal(result.data.diagnosis.code,'resources');
+});
+test('plan diagnosis returns a real plan when a free minute falls between suggestion steps',async t=>{
+  const f=await fixture(t),held=await f.hold();
+  f.db.prepare('UPDATE allocations SET start=480,end=541 WHERE hold_id=?').run(held.id);
+  f.db.prepare('INSERT INTO allocations VALUES (?,?,?,?,?,?)').run('other-truck',held.id,f.j.date,'gm-truck-2',480,541);
+  const {data:job}=await f.customer('/jobs',{...f.j,title:'Only one available minute',pickupEnd:'09:31',dropStart:'09:35',dropEnd:'10:06'});
+  const result=await f.mover('/jobs/'+job.id+'/suggestions',{...f.o,loadMinutes:30,travelMinutes:5,unloadMinutes:30});
+  assert.equal(result.status,200);
+  assert.deepEqual(result.data.plans.map(plan=>plan.start),['09:01']);
+  assert.equal(result.data.diagnosis,undefined);
+});
+
+test('plan diagnosis requests confirmation for legacy moves with missing access',async t=>{
+  const f=await fixture(t);
+  f.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify({...f.j,dropEnd:''}),f.j.id);
+  const result=await f.mover('/jobs/'+f.j.id+'/suggestions',f.o);
+  assert.equal(result.status,200);
+  assert.deepEqual(result.data.plans,[]);
+  assert.equal(result.data.diagnosis.code,'missing_access');
+  assert.equal(result.data.diagnosis.preview,undefined);
+});

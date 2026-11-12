@@ -18,7 +18,7 @@ if(import.meta.env.VITE_BRYNTUM_PRESENTATION_MODE==='true'){
 const colors={load:'#366c52',travel:'#526b7b',wait:'#896132',unload:'#366c52',buffer:'#66717f'};
 const labels={load:'Loading',travel:'Travel',wait:'Wait for access',unload:'Unloading',buffer:'Return buffer'};
 
-export default function Schedule({job,offer,resources=[],allocations=[]}) {
+export default function Schedule({job,offer,resources=[],allocations=[],accessPreview=false}) {
   const host=useRef(null),instance=useRef(null);
   const [view,setView]=useState('plan');
   const [smallScreen,setSmallScreen]=useState(()=>window.matchMedia('(max-width:760px)').matches);
@@ -75,12 +75,12 @@ export default function Schedule({job,offer,resources=[],allocations=[]}) {
     return()=>{instance.current?.destroy();instance.current=null;};
   },[compact,showTimeline,JSON.stringify(job),JSON.stringify(offer),JSON.stringify(resources),JSON.stringify(allocations)]);
 
-  return <section className="schedule-wrap schedule-clean" aria-label={plan?'Moving plan and resource timeline':'Resource calendar'}>
-    {plan&&<><div className="schedule-toolbar"><div><strong>Your moving plan</strong><span>{clock(plan.start)}–{clock(plan.end)} · GMT+7</span></div><div className="schedule-view-switch" role="group" aria-label="Timeline view"><button type="button" aria-pressed={view==='plan'} onClick={()=>setView('plan')}>Move plan</button><button type="button" aria-pressed={view==='resources'} onClick={()=>setView('resources')}>Crew & vehicle</button></div></div>
+  return <section className="schedule-wrap schedule-clean" aria-label={accessPreview?'Requested access preview':plan?'Moving plan and resource timeline':'Resource calendar'}>
+    {plan&&<><div className="schedule-toolbar"><div><strong>{accessPreview?'Requested access preview':'Your moving plan'}</strong><span>{clock(plan.start)}–{clock(plan.end)} · GMT+7</span></div><div className="schedule-view-switch" role="group" aria-label="Timeline view"><button type="button" aria-pressed={view==='plan'} onClick={()=>setView('plan')}>Move plan</button><button type="button" aria-pressed={view==='resources'} onClick={()=>setView('resources')}>Crew & vehicle</button></div></div>
     <p className="crew-summary">{selected.map(r=>r.name).join(' · ')}</p></>}
     {showTimeline?<div ref={host} className="scheduler-host" aria-label={compact?'One moving timeline and two building access windows':'Individual crew and vehicle availability'}/>:<div className="mobile-access-windows"><div><span>Pickup access</span><strong>{job.pickupStart}–{job.pickupEnd}</strong></div><div><span>Drop-off access</span><strong>{job.dropStart}–{job.dropEnd}</strong></div></div>}
     {timelineError&&<p className="timeline-error" role="status">The visual timeline is unavailable. The reviewed steps and times are listed below.</p>}
     {plan&&<ol className="schedule-steps" aria-label="Moving steps">{phases.map((p,i)=><li key={p.kind}><span style={{background:colors[p.kind]}}>{i+1}</span><div><strong>{labels[p.kind]}</strong><time>{clock(p.start)}–{clock(p.end)}</time></div></li>)}</ol>}
-    <div className="timeline-foot"><span>{compact?(smallScreen?'Building access windows are customer-confirmed.':'Shaded building rows show the allowed access windows.'):'All selected resources stay reserved through the return buffer. Scroll sideways for more hours.'}</span>{showTimeline&&<span>Bryntum Scheduler · Trial</span>}</div>
+    <div className="timeline-foot"><span>{accessPreview?'Requested windows are pending building confirmation.':compact?(smallScreen?'Building access windows are customer-confirmed.':'Shaded building rows show the allowed access windows.'):'All selected resources stay reserved through the return buffer. Scroll sideways for more hours.'}</span>{showTimeline&&<span>Bryntum Scheduler · Trial</span>}</div>
   </section>;
 }

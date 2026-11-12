@@ -12,7 +12,22 @@ const stageActions={
 export function ActionQueue({workspace,onOpen,onMessages}){
   const {user,jobs,holds,offers,conversations=[]}=workspace,provider=user.role==='provider';
   const relevant=jobs.filter(j=>!provider||holds.some(h=>h.job===j.id)||offers.some(o=>o.jobId===j.id));
-  const items=relevant.filter(j=>!j.restricted).map(j=>({job:j,label:paymentAction(user.role,holds.find(h=>h.job===j.id))||stageActions[user.role][j.status]||(j.status==='open'?(provider?(offers.find(o=>o.jobId===j.id)?.status==='outdated'?'Renew your quote':null):offers.some(o=>o.jobId===j.id&&o.status==='offered')?'Compare moving offers':null):null)})).filter(i=>i.label).sort((a,b)=>({balance_due:0,awaiting_confirmation:1,changes_requested:2,reserved:3,completed:4}[a.job.status]??5)-({balance_due:0,awaiting_confirmation:1,changes_requested:2,reserved:3,completed:4}[b.job.status]??5)).slice(0,3);
+  const priority = { balance_due:0, awaiting_confirmation:1, changes_requested:2, reserved:3, completed:4 };
+  const items = relevant.filter(job => !job.restricted).map(job => {
+    const hold = holds.find(h => h.job === job.id);
+    const change = hold?.fulfillment?.scheduleChange;
+    if (hold?.fulfillment?.scheduleChangePending) {
+      const label = change.status === 'proposed'
+        ? (provider ? 'View your proposed schedule' : 'Review the new schedule')
+        : (provider ? 'Propose a new schedule' : 'View your schedule request');
+      return { job, label, priority: -1 };
+    }
+    const openAction = job.status === 'open' && (provider
+      ? offers.some(o => o.jobId === job.id && o.status === 'outdated') && 'Renew your quote'
+      : offers.some(o => o.jobId === job.id && o.status === 'offered') && 'Compare moving offers');
+    const label = paymentAction(user.role, hold) || stageActions[user.role][job.status] || openAction;
+    return { job, label, priority: priority[job.status] ?? 5 };
+  }).filter(item => item.label).sort((a, b) => a.priority - b.priority).slice(0, 3);
   const unread=conversations.reduce((n,c)=>n+c.unread,0);
   if(!items.length&&!unread)return null;
   return <section className="action-queue" aria-label="Your next steps"><div className="section-title"><h2>Your next steps</h2><span>Keep your move moving</span></div><div className="action-grid">{unread>0&&<button className="action-card" onClick={onMessages}><span className="action-icon"><MessageCircle size={21}/></span><span><strong>{unread} unread {unread===1?'message':'messages'}</strong><small>Questions and updates from your move</small></span><ArrowRight size={18}/></button>}{items.map(({job,label})=><button className="action-card" key={job.id} onClick={()=>onOpen(job)}><span className="action-icon"><Clock3 size={21}/></span><span><strong>{label}</strong><small>{job.title}</small></span><ArrowRight size={18}/></button>)}</div></section>;

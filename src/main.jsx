@@ -107,7 +107,7 @@ function MoveDetail({job,workspace,status,onClose,onChange,onToast,onEdit,initia
   const {user,offers,users,resources,allocations,holds,paymentHistory=[]}=workspace,provider=user.role==='provider';
   const h=holds.find(h=>h.job===job.id),snapshot=h?.snapshot?JSON.parse(h.snapshot):null;
   const [offerSort,setOfferSort]=useState('price'),[timelineOpen,setTimelineOpen]=useState(false);
-  const matching=offers.filter(o=>o.jobId===job.id&&(!h||o.id===h.offer)).map(o=>snapshot?.id===o.id?snapshot:o).sort((a,b)=>Number(a.status!=='offered')-Number(b.status!=='offered')||(offerSort==='finish'?planMove(job,a).end-planMove(job,b).end:a.price-b.price));
+  const matching=offers.filter(o=>o.jobId===job.id&&(!h||o.id===h.offer)).map(o=>snapshot?.id===o.id?{...snapshot,start:h.fulfillment?.schedule?.start||snapshot.start}:o).sort((a,b)=>Number(a.status!=='offered')-Number(b.status!=='offered')||(offerSort==='finish'?planMove(job,a).end-planMove(job,b).end:a.price-b.price));
   const [chosen,setChosen]=useState(h?.offer||initialOfferId||matching[0]?.id||'');
   const [error,setError]=useState(''),[busy,setBusy]=useState(false),[editing,setEditing]=useState(false),[recoveryReviewed,setRecoveryReviewed]=useState(false);
   const selected=matching.find(o=>o.id===(h?.offer||chosen))||matching[0];
@@ -118,7 +118,7 @@ function MoveDetail({job,workspace,status,onClose,onChange,onToast,onEdit,initia
   async function reserve(){setBusy(true);setError('');try{await api(`/offers/${selected.id}/reserve`,{});await onChange();onToast('Crew and truck held for 10 minutes. Complete the Sandbox deposit.');}catch(e){setError(e.message);}finally{setBusy(false);}}
   return <Modal title={job.title} subtitle={`${dateLabel(job.date)} · ${job.size} · Budget ${money(job.budget)}`} onClose={onClose} wide>
     {job.status==='cancelled'&&<PostLifecycle job={job} provider={provider} onChange={onChange} onToast={onToast}/>}
-    {h?.status==='booked'&&<FulfillmentPanel key={h.id} hold={h} provider={provider} status={status} onChange={onChange} onToast={onToast}/>}
+    {h?.status==='booked'&&<FulfillmentPanel key={h.id} hold={h} job={job} provider={provider} status={status} onChange={onChange} onToast={onToast} renderTimeline={(previewJob,previewOffer)=><Schedule job={previewJob} offer={previewOffer} resources={resources} allocations={allocations.filter(a=>a.holdId!==h.id)}/>}/>}
     <div className="detail-route"><div><span className="route-label">PICKUP</span><strong>{job.from}</strong><small><Clock3 size={14}/>{job.pickupStart}–{job.pickupEnd}</small></div><MoveRight size={27}/><div><span className="route-label">DESTINATION</span><strong>{job.to}</strong><small><Clock3 size={14}/>{job.dropStart}–{job.dropEnd}</small></div></div>
     <div className="inventory-block"><Package size={18}/><p>{job.inventory}</p></div>{job.notes&&<details className="building-notes"><summary>Building instructions & handling notes</summary><p>{job.notes}</p></details>}
     {!provider&&job.status==='open'&&<div className="detail-tools"><span className="muted">Need to change inventory or access?</span><button type="button" className="text-button" onClick={onEdit}>Edit move</button></div>}
@@ -134,20 +134,80 @@ function MoveDetail({job,workspace,status,onClose,onChange,onToast,onEdit,initia
 function OfferForm({job,workspace,initial,onSaved,onCancel}){
   const available=workspace.resources.filter(r=>r.provider===workspace.user.id);
   const [form,setForm]=useState(initial||{price:Math.min(job.budget,180),start:job.pickupStart,loadMinutes:60,travelMinutes:45,unloadMinutes:60,resources:[available.find(r=>r.kind==='truck')?.id,...available.filter(r=>r.kind==='mover').slice(0,2).map(r=>r.id)].filter(Boolean),note:'Protective blankets included. Durations and access windows reviewed by the operator.'});
-  const [busy,setBusy]=useState(false),[finding,setFinding]=useState(false),[error,setError]=useState(''),[suggestions,setSuggestions]=useState(null),[reviewed,setReviewed]=useState(false);
+  const [busy,setBusy]=useState(false),[finding,setFinding]=useState(false),[error,setError]=useState(''),[result,setResult]=useState(null),[reviewed,setReviewed]=useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const estimateRevision = useRef(0);
+  const suggestions = result?.jobVersion === (job.version || 0) ? result.response : null;
+  const diagnosis = suggestions?.diagnosis;
+  const preview = previewOpen ? diagnosis?.preview : null;
+  const previewJob = preview ? { ...job } : job;
+  if (preview) {
+    for (const change of diagnosis.changes) previewJob[change.side + 'End'] = change.requestedEnd;
+  }
   const plan=planMove(job,form),conflicts=plan.valid?resourceConflicts(job.date,form.resources,plan,workspace.allocations):[];
   const hasTeam=form.resources.filter(id=>available.some(r=>r.id===id&&r.kind==='truck')).length===1&&form.resources.some(id=>available.some(r=>r.id===id&&r.kind==='mover'));
-  function update(key,value){setForm(f=>({...f,[key]:value}));setSuggestions(null);setError('');setReviewed(false);}
-  async function save(e){e.preventDefault();setBusy(true);setError('');try{await api(`/jobs/${job.id}/offers`,form);await onSaved();}catch(e){setError(e.message);}finally{setBusy(false);}}
-  async function find(){setFinding(true);setError('');try{setSuggestions(await api(`/jobs/${job.id}/suggestions`,form));}catch(e){setError(e.message);}finally{setFinding(false);}}
+  function update(key, value) {
+    estimateRevision.current++;
+    setForm(current => ({ ...current, [key]: value }));
+    setResult(null);
+    setPreviewOpen(false);
+    setError('');
+    setReviewed(false);
+  }
+  async function save(e){e.preventDefault();if(preview)return;setBusy(true);setError('');try{await api(`/jobs/${job.id}/offers`,form);await onSaved();}catch(e){setError(e.message);}finally{setBusy(false);}}
+  async function find() {
+    const revision = estimateRevision.current;
+    const jobVersion = job.version || 0;
+    setFinding(true);
+    setResult(null);
+    setPreviewOpen(false);
+    setError('');
+    try {
+      const response = await api(`/jobs/${job.id}/suggestions`, form);
+      if (revision === estimateRevision.current) setResult({ response, jobVersion });
+    } catch (e) {
+      if (revision === estimateRevision.current) setError(e.message);
+    } finally {
+      setFinding(false);
+    }
+  }
   return <form className="offer-form" onSubmit={save}><div className="section-title"><h3>{initial?.status==='outdated'?'Review the changed move':'Build your proposal'}</h3><Tag>Operator-reviewed estimates</Tag></div><p className="muted">Set the durations and crew size after reviewing the inventory. The example estimates are editable; AI does not set the price or labor time.</p><div className="form-grid">
     <Field label="Start loading"><input type="time" value={form.start} onInput={e=>update('start',e.target.value)} onChange={e=>update('start',e.target.value)} required/></Field><Field label="Total price · USD"><input type="number" min={20} max={10000} step={1} value={form.price} onChange={e=>update('price',Number(e.target.value))} required/></Field>
     {[['loadMinutes','Load · minutes'],['travelMinutes','Travel · minutes'],['unloadMinutes','Unload · minutes']].map(([key,label])=><Field label={label} key={key}><input type="number" min={key==='travelMinutes'?5:15} max={240} step={5} value={form[key]} onChange={e=>update(key,Number(e.target.value))} required/></Field>)}
   </div><fieldset className="resource-section"><legend>One vehicle and the required crew</legend><div className="resource-picker">{available.map(r=><label key={r.id} className={form.resources.includes(r.id)?'checked':''}><input type={r.kind==='truck'?'radio':'checkbox'} name={r.kind==='truck'?'truck':undefined} checked={form.resources.includes(r.id)} onChange={e=>update('resources',r.kind==='truck'?[...form.resources.filter(id=>!available.some(x=>x.id===id&&x.kind==='truck')),r.id]:e.target.checked?[...form.resources,r.id]:form.resources.filter(id=>id!==r.id))}/>{r.kind==='truck'?<Truck size={17}/>:<Users size={17}/>} {r.name}</label>)}</div></fieldset>
   <div className="suggestion-tools"><Button type="button" variant="secondary" onClick={find} busy={finding} disabled={!hasTeam||busy}><CalendarDays size={17}/>Find available plans</Button><p className="muted">Keeps your durations, price and crew size. Checks other trucks and crews owned by your team.</p></div>
-  {suggestions&&<section className="plan-suggestions" aria-label="Available plans"><h3>{suggestions.plans.length?'Choose a feasible starting point':'No feasible plan found'}</h3><p>{suggestions.explanation}</p><div>{suggestions.plans.map((p,i)=><button type="button" key={i} onClick={()=>{setForm(f=>({...f,...p}));setReviewed(false);setError('');}}><strong>{p.start} – {clock(planMove(job,p).end)}</strong><span>{p.resources.map(id=>available.find(r=>r.id===id)?.name).join(' · ')}</span><small>{money(p.price)} · {money(Math.round(p.price*20)/100)} deposit</small><b>Use this plan <ArrowRight size={15}/></b></button>)}</div></section>}
-  <Schedule job={job} offer={form} resources={available} allocations={workspace.allocations}/><div className={`plan-feedback ${plan.valid&&hasTeam&&!conflicts.length?'valid':'invalid'}`} role="status">{!plan.valid?<><AlertCircle size={19}/><div>{plan.errors.map(e=><p key={e}>{e}</p>)}</div></>:!hasTeam?<><AlertCircle size={19}/>Choose one truck and at least one mover.</>:conflicts.length?<><AlertCircle size={19}/><span>{[...new Set(conflicts.map(c=>available.find(r=>r.id===c.resourceId)?.name))].join(', ')} already reserved during this plan. Find an available plan or change the team.</span></>:<><CheckCircle2 size={19}/><span>Fits both access windows and current resource availability, including the 15-minute return buffer. Availability is checked again when you send and when the customer reserves.</span></>}</div>
-  <Field label="Your message to the customer" wide><textarea rows={3} value={form.note} onChange={e=>update('note',e.target.value)} minLength={10} maxLength={1200} required/></Field><label className="checkbox-row"><input type="checkbox" checked={reviewed} onChange={e=>setReviewed(e.target.checked)} required/>I reviewed the inventory, access windows, crew, durations and price for this offer.</label>{error&&<p className="alert error" role="alert">{error}</p>}<div className="modal-actions"><span className="muted">20% deposit · {money(Math.round(form.price*20)/100)}</span>{onCancel&&<Button type="button" variant="ghost" onClick={onCancel}>Cancel edit</Button>}<Button type="submit" disabled={!plan.valid||!hasTeam||Boolean(conflicts.length)||!reviewed||finding} busy={busy}>Send offer <ArrowUpRight size={17}/></Button></div></form>;
+  {suggestions?.plans.length > 0 && <section className="plan-suggestions" aria-label="Available plans">
+    <h3>Choose a feasible starting point</h3>
+    <p>{suggestions.explanation}</p>
+    <div>{suggestions.plans.map(p => <button type="button" key={p.start} onClick={() => {
+      setForm(current => ({ ...current, ...p }));
+      setReviewed(false);
+      setError('');
+    }}>
+      <strong>{p.start} – {clock(planMove(job,p).end)}</strong>
+      <span>{p.resources.map(id => available.find(r => r.id === id)?.name).join(' · ')}</span>
+      <small>{money(p.price)} · {money(Math.round(p.price*20)/100)} deposit</small>
+      <b>Use this plan <ArrowRight size={15}/></b>
+    </button>)}</div>
+  </section>}
+  {diagnosis && <section className="plan-diagnosis" aria-label="Scheduling conflict">
+    <div role="status">
+      <h3>{diagnosis.code === 'resources' ? 'Truck or crew already reserved' : diagnosis.code === 'shift' ? 'Move exceeds the crew shift' : diagnosis.code === 'missing_access' ? 'Building access needs confirmation' : 'Building access is too short'}</h3>
+      {(diagnosis.code !== 'access' || !diagnosis.changes.length) && <p>{diagnosis.message}</p>}
+    </div>
+    {diagnosis.changes.length > 0 && <ul>{diagnosis.changes.map(change => <li key={change.side}>
+      <strong>{change.side === 'pickup' ? 'Pickup' : 'Drop-off'} needs {change.minutes} more {change.minutes === 1 ? 'minute' : 'minutes'}</strong>
+      <span>Confirmed until {change.confirmedEnd}. Request access until {change.requestedEnd}.</span>
+    </li>)}</ul>}
+    {diagnosis.preview ? <>
+      <p>Ask the customer to confirm the new access times and update the move before sending a quote.</p>
+      <Button type="button" variant="secondary" aria-expanded={Boolean(preview)} onClick={() => setPreviewOpen(open => !open)}>
+        {preview ? 'Show confirmed access' : 'Preview requested access'} <ArrowRight size={17}/>
+      </Button>
+    </> : diagnosis.code === 'access' && <p>Review another date or the task estimates with the customer.</p>}
+  </section>}
+  <Schedule job={previewJob} offer={preview || form} resources={available} allocations={workspace.allocations} accessPreview={Boolean(preview)}/>{!preview && <div className={`plan-feedback ${plan.valid&&hasTeam&&!conflicts.length?'valid':'invalid'}`} role="status">{!plan.valid?<><AlertCircle size={19}/><div>{plan.errors.map(e=><p key={e}>{e}</p>)}</div></>:!hasTeam?<><AlertCircle size={19}/>Choose one truck and at least one mover.</>:conflicts.length?<><AlertCircle size={19}/><span>{[...new Set(conflicts.map(c=>available.find(r=>r.id===c.resourceId)?.name))].join(', ')} already reserved during this plan. Find an available plan or change the team.</span></>:<><CheckCircle2 size={19}/><span>Fits both access windows and current resource availability, including the 15-minute return buffer. Availability is checked again when you send and when the customer reserves.</span></>}</div>}
+  <Field label="Your message to the customer" wide><textarea rows={3} value={form.note} onChange={e=>update('note',e.target.value)} minLength={10} maxLength={1200} required/></Field><label className="checkbox-row"><input type="checkbox" checked={reviewed} onChange={e=>setReviewed(e.target.checked)} required/>I reviewed the inventory, access windows, crew, durations and price for this offer.</label>{error&&<p className="alert error" role="alert">{error}</p>}<div className="modal-actions"><span className="muted">20% deposit · {money(Math.round(form.price*20)/100)}</span>{onCancel&&<Button type="button" variant="ghost" onClick={onCancel}>Cancel edit</Button>}<Button type="submit" disabled={Boolean(preview)||!plan.valid||!hasTeam||Boolean(conflicts.length)||!reviewed||finding} busy={busy}>Send offer <ArrowUpRight size={17}/></Button></div></form>;
 }
 function PayPalCheckout({hold,status,onPaid}){
   const [error,setError]=useState('');const [checking,setChecking]=useState(false);const [paying,setPaying]=useState(false);

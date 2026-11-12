@@ -4,12 +4,13 @@ import { Button, Field, Tag } from './ui';
 import { api } from './api';
 import { money } from '../shared/schedule';
 import PayoutPanel from './PayoutPanel';
+import ScheduleChangePanel from './ScheduleChangePanel';
 import {QrPaymentPanel} from './QrPayment';
 
 const titles={scheduled:'Your crew is booked',in_progress:'The move is in progress',awaiting_confirmation:'Review the completed work',changes_requested:'Changes requested',balance_due:'Work accepted · final payment due',completed:'Move completed · paid in full'};
-const eventLabels={started:'Move started',completion_reported:'Completion reported',changes_requested:'Changes requested',work_accepted:'Customer accepted the work',balance_paid:'Final payment verified',provider_payout_requested:'Moving-team payout requested',provider_payout_received:'Moving-team payment received'};
+const eventLabels={schedule_change_requested:'Building hours updated',schedule_change_proposed:'New schedule proposed',schedule_changed:'New schedule confirmed',started:'Move started',completion_reported:'Completion reported',changes_requested:'Changes requested',work_accepted:'Customer accepted the work',balance_paid:'Final payment verified',provider_payout_requested:'Moving-team payout requested',provider_payout_received:'Moving-team payment received'};
 
-export default function FulfillmentPanel({hold,provider,status,onChange,onToast}){
+export default function FulfillmentPanel({hold,job,provider,status,onChange,onToast,renderTimeline}){
   const f=hold.fulfillment;
   const [busy,setBusy]=useState(''),[error,setError]=useState(''),[note,setNote]=useState(''),[confirmed,setConfirmed]=useState(false),[requestingChanges,setRequestingChanges]=useState(false);
   if(!f)return null;
@@ -32,7 +33,13 @@ export default function FulfillmentPanel({hold,provider,status,onChange,onToast}
   return <section className={`fulfillment-panel ${f.stage==='completed'?'fully-paid':''}`} aria-label="Work and payment status">
     <div className="fulfillment-heading"><CheckCircle2 size={25}/><div><h3>{titles[f.stage]}</h3><p>{f.stage==='completed'?'Both Sandbox payments are verified. No balance remains.':'Deposit confirmed. The final balance is paid only after customer acceptance.'}</p></div><Tag tone="green">{f.paidInFull?'Paid in full':'Deposit paid'}</Tag></div>
     <dl className="payment-totals"><div><dt>Agreed total</dt><dd>{money(f.total)}</dd></div><div><dt>Deposit paid · 20%</dt><dd>{money(f.deposit)}</dd></div><div><dt>{f.paidInFull?'Final balance paid · 80%':'Remaining balance · 80%'}</dt><dd>{money(f.balance)}</dd></div></dl>
-    {f.stage==='scheduled'&&<div className="work-action"><p>{provider?'Start this move when your crew begins the agreed work.':'Your mover will update the job when the work starts. You do not pay the remaining balance yet.'}</p>{provider&&<Button onClick={()=>action('/work/start',{},'Move started. The customer can follow its progress.')} busy={busy==='/work/start'} disabled={Boolean(busy)}><Play size={17}/>Start move</Button>}</div>}
+    {f.stage==='scheduled'&&<>
+      <ScheduleChangePanel key={`${f.scheduleChange?.id}:${f.scheduleChange?.version}:${f.scheduleChange?.status}`} hold={hold} job={job} provider={provider} onChange={onChange} onToast={onToast} renderTimeline={renderTimeline}/>
+      <div className="work-action">
+        <p>{f.scheduleChangePending?'Work can start after the customer approves the updated schedule.':provider?'Start this move when your crew begins the agreed work.':'Your mover will update the job when the work starts. You do not pay the remaining balance yet.'}</p>
+        {provider&&<Button onClick={()=>action('/work/start',{},'Move started. The customer can follow its progress.')} busy={busy==='/work/start'} disabled={Boolean(busy)||f.scheduleChangePending}><Play size={17}/>Start move</Button>}
+      </div>
+    </>}
     {f.stage==='in_progress'&&!provider&&<p className="work-copy">Your crew is working. The mover must report completion before you can review and pay the remaining balance.</p>}
     {f.stage==='changes_requested'&&<div className="work-attention"><strong>Customer’s requested changes</strong><p>{f.customerNote}</p><small>{provider?'Resolve these points, then send a new completion report.':'Your mover must address this request and report completion again before final payment.'}</small></div>}
     {provider&&['in_progress','changes_requested'].includes(f.stage)&&<form className="work-report" onSubmit={e=>{e.preventDefault();action('/work/report',{note},'Completion reported. Waiting for the customer’s review.');}}><Field label="Completion report"><textarea value={note} onChange={e=>setNote(e.target.value)} required minLength={10} maxLength={2000} rows={3} placeholder="Describe the completed delivery and anything the customer should inspect."/></Field><Button type="submit" disabled={Boolean(busy)||note.trim().length<10} busy={busy==='/work/report'}><Send size={17}/>Report work complete</Button></form>}

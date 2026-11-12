@@ -38,6 +38,11 @@ Store API secrets in the server environment or the ignored `.env`. Vite embeds `
 - **PayPal Orders** collects a 20% deposit to book the crew. Customer acceptance unlocks a separate order for the 80% balance. The mover can create a time-limited QR checkout link for the customer to open on a phone. The server verifies completed captures and reconciles retries against the same orders.
 - **PayPal Payouts** tracks the crew's settlement separately after both captures have been verified. The crew is marked paid once PayPal confirms the matching payout item succeeded.
 
+## Schedule changes
+
+- Before deposit, **Find available plans** explains access and crew conflicts and previews a possible extension of the building hours. Confirm any new hours before sending the quote.
+- After deposit, the customer can report confirmed changes to the building hours before work starts. The assigned mover proposes a new start on the same date. Customer approval checks the original crew and truck again and updates their allocations. The quote, deposit, and remaining balance stay attached to the original booking.
+
 ## Project layout
 
 | Path | Purpose |

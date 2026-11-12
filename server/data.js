@@ -28,6 +28,12 @@ export function openDatabase(file) {
       id INTEGER PRIMARY KEY, hold_id TEXT NOT NULL REFERENCES holds(id), actor TEXT NOT NULL,
       action TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS booking_schedule_changes (
+      id TEXT PRIMARY KEY, hold_id TEXT NOT NULL REFERENCES holds(id),
+      status TEXT NOT NULL CHECK (status IN ('requested','proposed','approved','superseded')),
+      version INTEGER NOT NULL DEFAULT 1, windows TEXT NOT NULL, note TEXT NOT NULL, start TEXT
+    );
+    CREATE INDEX IF NOT EXISTS booking_schedule_changes_hold ON booking_schedule_changes(hold_id);
     CREATE TABLE IF NOT EXISTS provider_settlements (
       hold_id TEXT PRIMARY KEY REFERENCES holds(id), provider TEXT NOT NULL, receiver TEXT NOT NULL,
       amount_cents INTEGER NOT NULL, batch_key TEXT NOT NULL UNIQUE, item_key TEXT NOT NULL UNIQUE,
