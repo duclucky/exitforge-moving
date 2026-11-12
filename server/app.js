@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { openDatabase, seed, users, resources } from './data.js';
 import { planMove, resourceConflicts, minutes, todayInZone, isMoveDate, suggestPlans, diagnosePlans } from '../shared/schedule.js';
 import { analyzeMove, surveyInput } from './survey.js';
+import { platformFeeFor } from '../shared/payments.js';
 import { PayPal } from './paypal.js';
 import { fulfillmentFor, registerFulfillment } from './fulfillment.js';
 import { conversationSummaries, registerMarketplace } from './marketplace.js';
@@ -29,6 +30,10 @@ const fail = (message, status = 400) => Object.assign(new Error(message), { stat
 const parse = row => row ? JSON.parse(row.data) : null;
 
 export function createApp({ database = 'data/exitforge.sqlite', env = process.env, paymentService, setup = false } = {}) {
+  const platformFeeBps = Number(env.PLATFORM_FEE_BPS ?? 50);
+  if (!Number.isInteger(platformFeeBps) || platformFeeBps < 0 || platformFeeBps >= 10000) {
+    throw new Error('PLATFORM_FEE_BPS must be a whole number from 0 to 9999.');
+  }
   const db = openDatabase(database); seed(db);
   const paypal = paymentService || new PayPal(env);
   const app = express();
@@ -90,7 +95,7 @@ export function createApp({ database = 'data/exitforge.sqlite', env = process.en
     if (!h || h.owner !== user.id) throw fail('Reservation not found.',404);
     return h;
   }
-  app.get('/api/status', (req,res) => res.json({ paypal: paypal.configured, clientId: env.PAYPAL_CLIENT_ID || null, ai: Boolean(env.AI_API_KEY && env.AI_MODEL), aiModel: env.AI_MODEL || null, demo: env.DEMO_MODE !== 'false', timezone: 'Asia/Ho_Chi_Minh', currency: 'USD' }));
+  app.get('/api/status', (req,res) => res.json({ paypal: paypal.configured, clientId: env.PAYPAL_CLIENT_ID || null, ai: Boolean(env.AI_API_KEY && env.AI_MODEL), aiModel: env.AI_MODEL || null, platformFeeBps, demo: env.DEMO_MODE !== 'false', timezone: 'Asia/Ho_Chi_Minh', currency: 'USD' }));
   app.post('/api/demo-session', (req,res) => {
     if (env.DEMO_MODE === 'false') throw fail('Demo identity switching is disabled.',403);
     const user = users.find(u => u.id === req.body.userId);
@@ -157,7 +162,11 @@ export function createApp({ database = 'data/exitforge.sqlite', env = process.en
   app.post('/api/jobs/:id/offers', (req,res) => {
     if(req.user.role!=='provider')throw fail('Choose a mover account to make an offer.',403);
     const j=job(req.params.id);
-    const o={...offerSchema.parse(req.body),id:randomUUID(),jobId:j.id,provider:req.user.id,deposit:Math.round(req.body.price*20)/100,status:'offered'};
+    const input = offerSchema.parse(req.body);
+    const o = {
+      ...input, id: randomUUID(), jobId: j.id, provider: req.user.id, status: 'offered',
+      deposit: Math.round(input.price * 20) / 100, platformFeeCents: platformFeeFor(input.price, platformFeeBps),
+    };
     atomic(()=>{
       expire();
       if(db.prepare("SELECT id FROM holds WHERE job=? AND status IN ('held','booked','needs_review')").get(j.id))throw fail('This move already has a reservation.',409);

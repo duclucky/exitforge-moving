@@ -43,6 +43,12 @@ Store API secrets in the server environment or the ignored `.env`. Vite embeds `
 - Before deposit, **Find available plans** explains access and crew conflicts and previews a possible extension of the building hours. Confirm any new hours before sending the quote.
 - After deposit, the customer can report confirmed changes to the building hours before work starts. The assigned mover proposes a new start on the same date. Customer approval checks the original crew and truck again and updates their allocations. The quote, deposit, and remaining balance stay attached to the original booking.
 
+When building access changes after booking, the customer can paste a notice, review the quoted text, and apply the detected hours before confirming. The mover can search for available starts using the originally booked truck and crew.
+
+## Platform fee
+
+New quotes default to a 0.5% platform fee. Set `PLATFORM_FEE_BPS` to change the rate for new quotes. The fee is deducted from the crew payout, and the customer pays the quoted total. Quotes record the fee in cents. Historical quotes without a recorded fee pay the full amount.
+
 ## Project layout
 
 | Path | Purpose |

@@ -171,3 +171,24 @@ test('schedule recovery cannot change a move after work starts', async t => {
   assert.equal((await f.provider(f.path + '/work/start', {})).status, 200);
   assert.equal((await f.customer(f.path + '/schedule-change/request', revisedAccess)).status, 409);
 });
+
+test('reschedule suggestions honor the current crew and include a feasible minute before a competing reservation', async t => {
+  const f = await fixture(t), url = f.path + '/schedule-change';
+  const {data} = await f.customer(url + '/request', {
+    ...revisedAccess, pickupStart: '09:00', pickupEnd: '10:01', dropStart: '10:45', dropEnd: '11:46',
+  });
+  const request = { id: data.scheduleChange.id, version: data.scheduleChange.version };
+  assert.equal((await f.other(url + '/suggestions', request)).status, 403);
+  const day = (await f.provider('/workspace')).data.jobs.find(job => job.id === f.h.job).date;
+  f.db.prepare("INSERT INTO holds (id,job,offer,owner,expires,status) VALUES ('another-test-hold',?,?,?,?,'held')").run(f.h.job,f.h.offer,f.h.owner,Date.now()+600000);
+  const allocate = f.db.prepare('INSERT INTO allocations VALUES (?,?,?,?,?,?)');
+  allocate.run('early-crew', 'another-test-hold', day, 'gm-1', 500, 541);
+  const result = await f.provider(url + '/suggestions', request);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.data.options, [{ start: '09:01', end: '11:46', reserveEnd: '12:01' }]);
+  assert.equal((await f.customer(f.path + '/receipt')).data.scheduleChange.status, 'requested');
+  allocate.run('return-buffer-truck', 'another-test-hold', day, 'gm-truck-1', 720, 760);
+  const blocked = await f.provider(url + '/suggestions', request);
+  assert.deepEqual(blocked.data.options, []);
+  assert.equal(blocked.data.reason, 'resources');
+});

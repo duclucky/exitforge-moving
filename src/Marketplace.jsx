@@ -3,7 +3,7 @@ import {ArrowRight,MessageCircle,Send,CheckCircle2,Clock3,Truck,FileText} from '
 import {Button,Field,Tag} from './ui';
 import {api} from './api';
 import {money} from '../shared/schedule';
-import {paymentAction} from '../shared/payments';
+import {paymentAction, quoteSettlement} from '../shared/payments';
 
 const stageActions={
   customer:{reserved:'Finish your deposit',booked:'Review your booked plan',awaiting_confirmation:'Inspect the completed work',changes_requested:'Follow up on requested fixes',balance_due:'Pay the final balance',needs_review:'Review your payment'},
@@ -63,9 +63,10 @@ export function PostLifecycle({job,provider,offer,onChange,onToast}){
   return <section className="lifecycle-tools"><button className="text-button" onClick={()=>setOpened(v=>!v)}>{provider?'Withdraw this offer':'Cancel this move'}</button>{opened&&<form onSubmit={submit}><h4>{provider?'Withdraw your quote?':'Cancel this unbooked move?'}</h4><p>{provider?'The customer will no longer be able to reserve this offer. You can send a revised offer later.':'This closes new offers and reservations while keeping the record. A move with an unresolved payment cannot be cancelled here.'}</p>{!provider&&<Field label="Reason for cancellation"><textarea rows={2} required minLength={5} maxLength={500} value={reason} onChange={e=>setReason(e.target.value)}/></Field>}<div className="work-buttons"><Button type="submit" variant="secondary" busy={busy} disabled={!provider&&reason.trim().length<5}>{provider?'Confirm withdrawal':'Confirm cancellation'}</Button><Button type="button" variant="ghost" onClick={()=>setOpened(false)}>Keep {provider?'offer':'move'}</Button></div></form>}{error&&<p className="alert error" role="alert">{error}</p>}</section>;
 }
 
-export function QuoteSummary({offer,resources,hold,closed=false}){
+export function QuoteSummary({offer,resources,hold,provider=false,closed=false}){
   const team=resources.filter(r=>offer.resources.includes(r.id));
   const paid=hold?.fulfillment?.paidInFull;
+  const settlement=quoteSettlement(offer);
   const paymentLabel=paid?`Paid in full · ${money(offer.price)}`:hold?.status==='booked'?`${money(offer.deposit)} deposit paid · ${money(offer.price-offer.deposit)} outstanding`:closed?`Recorded split: ${money(offer.deposit)} deposit · ${money(offer.price-offer.deposit)} final balance`:`${money(offer.deposit)} to book · ${money(offer.price-offer.deposit)} after acceptance`;
-  return <div className="quote-summary"><div><Truck size={20}/><span><strong>{hold?.status==='booked'?'Your booked team':hold?'Your reserved team':'Your proposed team'}</strong><small>{team.map(r=>r.name).join(' · ')}</small></span></div><div><CheckCircle2 size={20}/><span><strong>{paymentLabel}</strong><small>Agreed quote {money(offer.price)} · Confirm any packing or assembly in the offer notes.</small></span></div></div>;
+  return <div className="quote-summary"><div><Truck size={20}/><span><strong>{hold?.status==='booked'?'Your booked team':hold?'Your reserved team':'Your proposed team'}</strong><small>{team.map(r=>r.name).join(' · ')}</small></span></div><div><CheckCircle2 size={20}/><span><strong>{paymentLabel}</strong><small>{provider ? `Platform fee ${money(settlement.feeCents/100)} · Crew payout ${money(settlement.payoutCents/100)}` : `Agreed quote ${money(offer.price)} · Confirm any packing or assembly in the offer notes.`}</small></span></div></div>;
 }

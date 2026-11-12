@@ -75,3 +75,26 @@ fieldset{border:0;padding:0;margin:0;min-width:0}fieldset:disabled{opacity:.75}.
   .schedule-change-comparison { grid-template-columns: 1fr; }
   .schedule-change .work-buttons > button { min-height: 44px; }
 }
+
+.schedule-access-notice { margin: 12px 0; border: 1px solid #d9e2d5; border-radius: 8px; padding: 12px; background: #fff; }
+.schedule-access-notice summary { cursor: pointer; font-weight: 600; color: #294a36; }
+.schedule-access-notice > .field { margin-top: 10px; }
+.schedule-access-draft { margin-top: 12px; }
+.schedule-access-draft blockquote { margin: 6px 0 10px; padding-left: 10px; border-left: 3px solid #adc4aa; overflow-wrap: anywhere; }
+.schedule-start-options { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 10px 0 0; list-style: none; }
+.schedule-start-options button { display: grid; gap: 3px; text-align: left; white-space: normal; }
+.schedule-start-options button[aria-pressed=true] { outline: 2px solid #2e6349; outline-offset: -2px; }
+.schedule-start-options span { font-size: 12px; }
+
+.quote-fee-preview {
+  display: grid;
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 12px;
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid #d9e2d5;
+  border-radius: 8px;
+  background: #f7faf4;
+}
+.quote-fee-preview dt { font-size: 12px; color: #52614f; }
+.quote-fee-preview dd { margin: 4px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }

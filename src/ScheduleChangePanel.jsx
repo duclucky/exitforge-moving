@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { CalendarClock } from 'lucide-react';
 import { Button, Field, Tag } from './ui';
 import { api } from './api';
+import AccessNotice from './AccessNotice';
 import { clock, money, planMove } from '../shared/schedule';
 
 const accessFields = [
@@ -20,7 +21,7 @@ function AccessSummary({ title, job, plan }) {
   </div>;
 }
 
-export default function ScheduleChangePanel({ hold, job, provider, onChange, onToast, renderTimeline }) {
+export default function ScheduleChangePanel({ hold, job, provider, canAnalyze, onChange, onToast, renderTimeline }) {
   const { schedule, scheduleChange: change, scheduleChangePending: pending, deposit } = hold.fulfillment;
   const quote = JSON.parse(hold.snapshot);
   const [editing, setEditing] = useState(false);
@@ -32,6 +33,8 @@ export default function ScheduleChangePanel({ hold, job, provider, onChange, onT
   const [start, setStart] = useState(change?.start || change?.windows.pickupStart || '');
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [availability, setAvailability] = useState(null);
   const [error, setError] = useState('');
 
   if (provider && !change) return null;
@@ -45,6 +48,21 @@ export default function ScheduleChangePanel({ hold, job, provider, onChange, onT
   function updateWindow(key, value) {
     setWindows(current => ({ ...current, [key]: value }));
     setConfirmed(false);
+  }
+
+  async function findAvailableStarts() {
+    setFinding(true);
+    setAvailability(null);
+    setError('');
+    try {
+      setAvailability(await api(`/holds/${hold.id}/schedule-change/suggestions`, {
+        id: change.id, version: change.version,
+      }));
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setFinding(false);
+    }
   }
 
   async function send(action, body, message) {
@@ -87,7 +105,17 @@ export default function ScheduleChangePanel({ hold, job, provider, onChange, onT
     }}>
       <Field label="Proposed start"><input type="time" value={start} required onInput={event => setStart(event.currentTarget.value)} onChange={event => setStart(event.target.value)}/></Field>
       {draftPlan && !draftPlan.valid && <p role="status">{draftPlan.errors.join(' ')}</p>}
-      <Button type="submit" busy={busy} disabled={!draftPlan?.valid}>Send proposed schedule</Button>
+      <div className="work-buttons">
+        <Button type="button" variant="secondary" disabled={busy} busy={finding} onClick={findAvailableStarts}>Find available starts</Button>
+        <Button type="submit" busy={busy} disabled={!draftPlan?.valid || finding}>Send proposed schedule</Button>
+      </div>
+      {availability && (availability.options.length
+        ? <ul className="schedule-start-options" aria-label="Available starts">{availability.options.map(option => <li key={option.start}>
+          <Button type="button" variant="secondary" disabled={busy} aria-pressed={start === option.start} onClick={() => setStart(option.start)}>
+            <strong>{option.start}–{option.end}</strong><span>Crew reserved until {option.reserveEnd}</span>
+          </Button>
+        </li>)}</ul>
+        : <p role="status">{availability.message}</p>)}
     </form>}
 
     {!provider && !editing && <div className="work-buttons">
@@ -102,6 +130,10 @@ export default function ScheduleChangePanel({ hold, job, provider, onChange, onT
       event.preventDefault();
       if (confirmed) send('request', { ...windows, note, confirmed, expectedChangeId: change?.id ?? null }, 'Updated building hours sent to your mover.');
     }}>
+      {canAnalyze && <AccessNotice onApply={(side, opening, closing) => {
+        setWindows(current => ({ ...current, [side + 'Start']: opening, [side + 'End']: closing }));
+        setConfirmed(false);
+      }}/>}
       <div className="schedule-change-fields">{accessFields.map(([key, label]) => <Field key={key} label={label}>
         <input type="time" required value={windows[key]} onInput={event => updateWindow(key, event.currentTarget.value)} onChange={event => updateWindow(key, event.target.value)}/>
       </Field>)}</div>

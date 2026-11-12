@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { clock, planMove, resourceConflicts } from '../shared/schedule.js';
+import { clock, diagnosePlans, planMove, resourceConflicts, suggestPlans, todayInZone } from '../shared/schedule.js';
 
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 const windowsSchema = z.object({ pickupStart: time, pickupEnd: time, dropStart: time, dropEnd: time });
@@ -87,6 +87,34 @@ export function registerScheduleChanges(app, { db, authorized, atomic, job, allo
       event(hold, req, 'schedule_change_requested', note);
     });
     res.json(receipt(hold));
+  });
+
+  app.post('/api/holds/:id/schedule-change/suggestions', (req, res) => {
+    const hold = authorized(req, 'provider');
+    const current = requireCurrent(hold, revisionSchema.parse(req.body));
+    requireScheduled(hold);
+    if (current.status === 'approved') throw conflict('This schedule has already been approved.');
+
+    const revised = { ...job(hold.job), ...JSON.parse(current.windows) };
+    const now = new Date();
+    const today = todayInZone(now);
+    if (revised.date < today) throw conflict('The booked day has passed. Agree on a new date with your customer.');
+    const notBefore = revised.date === today
+      ? Math.floor((now.getTime() - Date.parse(revised.date + 'T00:00:00+07:00')) / 60000) + 1
+      : 0;
+    const quote = JSON.parse(hold.snapshot);
+    const busy = allocations().filter(allocation => allocation.holdId !== hold.id);
+    const candidates = suggestPlans(revised, quote, busy, 3, notBefore);
+    if (!candidates.length) {
+      const { plan, diagnosis } = diagnosePlans(revised, quote, [quote.resources], busy, notBefore);
+      if (!plan) return res.json({ options: [], reason: diagnosis.code, message: diagnosis.message });
+      candidates.push(plan);
+    }
+
+    res.json({ options: candidates.map(candidate => {
+      const plan = planMove(revised, candidate);
+      return { start: candidate.start, end: clock(plan.end), reserveEnd: clock(plan.reserveEnd) };
+    }) });
   });
 
   app.post('/api/holds/:id/schedule-change/propose', (req, res) => {

@@ -34,7 +34,7 @@ export default function FulfillmentPanel({hold,job,provider,status,onChange,onTo
     <div className="fulfillment-heading"><CheckCircle2 size={25}/><div><h3>{titles[f.stage]}</h3><p>{f.stage==='completed'?'Both Sandbox payments are verified. No balance remains.':'Deposit confirmed. The final balance is paid only after customer acceptance.'}</p></div><Tag tone="green">{f.paidInFull?'Paid in full':'Deposit paid'}</Tag></div>
     <dl className="payment-totals"><div><dt>Agreed total</dt><dd>{money(f.total)}</dd></div><div><dt>Deposit paid · 20%</dt><dd>{money(f.deposit)}</dd></div><div><dt>{f.paidInFull?'Final balance paid · 80%':'Remaining balance · 80%'}</dt><dd>{money(f.balance)}</dd></div></dl>
     {f.stage==='scheduled'&&<>
-      <ScheduleChangePanel key={`${f.scheduleChange?.id}:${f.scheduleChange?.version}:${f.scheduleChange?.status}`} hold={hold} job={job} provider={provider} onChange={onChange} onToast={onToast} renderTimeline={renderTimeline}/>
+      <ScheduleChangePanel key={`${f.scheduleChange?.id}:${f.scheduleChange?.version}:${f.scheduleChange?.status}`} hold={hold} job={job} provider={provider} canAnalyze={status?.ai} onChange={onChange} onToast={onToast} renderTimeline={renderTimeline}/>
       <div className="work-action">
         <p>{f.scheduleChangePending?'Work can start after the customer approves the updated schedule.':provider?'Start this move when your crew begins the agreed work.':'Your mover will update the job when the work starts. You do not pay the remaining balance yet.'}</p>
         {provider&&<Button onClick={()=>action('/work/start',{},'Move started. The customer can follow its progress.')} busy={busy==='/work/start'} disabled={Boolean(busy)||f.scheduleChangePending}><Play size={17}/>Start move</Button>}

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createApp} from '../server/app.js';
 import {PayPal} from '../server/paypal.js';
 
-async function fixture(t,{configured=true}={}){
+async function fixture(t,{configured=true,feeBps,quotePrice}={}){
   const batches=new Map();let createCalls=0,loseResponse=false;
   const payment={configured:true,
     async create(h,q){this.h=h;this.q=q;return{id:'DEPOSIT'};},
@@ -13,10 +13,15 @@ async function fixture(t,{configured=true}={}){
     async createPayout(row){createCalls++;let b=batches.get(row.batch_key);if(!b){b={batch_header:{payout_batch_id:'BATCH-1',batch_status:'PENDING',sender_batch_header:{sender_batch_id:row.batch_key}},items:[{payout_item_id:'ITEM-1',transaction_status:'PENDING',payout_item:{receiver:row.receiver,recipient_type:'PAYPAL_ID',sender_item_id:row.item_key,amount:{currency:'USD',value:(row.amount_cents/100).toFixed(2)}}}]};batches.set(row.batch_key,b);}if(loseResponse){loseResponse=false;throw new Error('Lost payout response');}return b;},
     async getPayout(){return [...batches.values()][0];},
   };
-  const env={DEMO_MODE:'true',...(configured?{PAYPAL_GOODMOVE_RECIPIENT:'TESTMERCHANT1'}:{})};
+  const env={DEMO_MODE:'true',PLATFORM_FEE_BPS:feeBps,...(configured?{PAYPAL_GOODMOVE_RECIPIENT:'TESTMERCHANT1'}:{})};
   const app=createApp({database:':memory:',env,paymentService:payment}),server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>{server.close();app.locals.db.close();});
   function client(){let cookie='';return async(path,body)=>{const r=await fetch(`http://127.0.0.1:${server.address().port}/api`+path,{headers:{Cookie:cookie,'Content-Type':'application/json'},...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)})});if(r.headers.has('set-cookie'))cookie=r.headers.get('set-cookie').split(';')[0];return{status:r.status,data:await r.json()};};}
   const customer=client(),provider=client(),other=client();for(const [r,userId] of [[customer,'customer'],[provider,'goodmove'],[other,'citycrew']])await r('/demo-session',{userId});
+  if(quotePrice){
+    const quote=(await provider('/workspace')).data.offers.find(offer=>offer.id==='offer-gm-101');
+    const result=await provider('/jobs/move-101/offers',{...quote,price:quotePrice,platformFeeCents:1});
+    assert.equal(result.status,201);
+  }
   const h=(await customer('/offers/offer-gm-101/reserve',{})).data,path='/holds/'+h.id;
   await customer(path+'/paypal-order',{});await customer(path+'/capture',{});
   async function complete(){await provider(path+'/work/start',{});await provider(path+'/work/report',{note:'Sandbox work is completed; please inspect it.'});await customer(path+'/work/accept',{confirmed:true});await customer(path+'/balance/paypal-order',{});await customer(path+'/balance/capture',{});}
@@ -71,4 +76,26 @@ test('duplicate payout submission reconciles the original Sandbox batch and reje
   assert.equal((await p.createPayout(row)).batch_header.payout_batch_id,'ORIGINAL123');assert.deepEqual(calls,['/v1/payments/payouts','/v1/payments/payouts/ORIGINAL123']);
   p.request=async()=>{throw Object.assign(new Error('Duplicate'),{code:'DUPLICATE_BATCH_ID',links:[{rel:'original_payout_batch',href:'https://example.com/v1/payments/payouts/OTHER'}]});};
   await assert.rejects(()=>p.createPayout(row),/Duplicate/);
+});
+
+test('the quoted platform fee reduces only the mover payout and stays fixed after booking',async t=>{
+  const f=await fixture(t,{quotePrice:181});
+  const quote=JSON.parse(f.h.snapshot);
+  assert.equal(quote.platformFeeCents,91);
+  assert.equal(quote.deposit,36.2);
+  f.env.PLATFORM_FEE_BPS='800';
+  const changedQuote={...quote,platformFeeCents:1};
+  f.db.prepare('UPDATE offers SET data=? WHERE id=?').run(JSON.stringify(changedQuote),f.h.offer);
+  const booked=(await f.customer(f.path+'/receipt')).data;
+  assert.equal(booked.total,181);
+  assert.equal(booked.balanceDue,144.8);
+  assert.equal(booked.payout.platformFee,0.91);
+  assert.equal(booked.payout.amount,180.09);
+  await f.complete();
+  assert.equal((await f.provider(f.path+'/payout',{})).data.amount,180.09);
+  const item=[...f.batches.values()][0].items[0].payout_item;
+  assert.equal(item.amount.value,'180.09');
+  f.success();
+  assert.equal((await f.provider(f.path+'/payout/check',{})).data.received,true);
+  assert.equal((await f.customer(f.path+'/receipt')).data.amountPaid,181);
 });

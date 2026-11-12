@@ -38,3 +38,19 @@ test('text evidence with a mistaken source label is attributed to its unique act
   const r=await analyzeMove(input,env,request({...output,items:[{...output.items[0],source:'notes'}]}));
   assert.equal(r.items.length,1);assert.equal(r.items[0].source,'inventory');
 });
+
+test('building notice extraction only returns the selected side and hours supported by its quote', async () => {
+  const notice = surveyInput.parse({ notes: 'Elevator reserved from 11h30 to 12h30.', accessSide: 'drop' });
+  assert.equal(notice.accessSide, 'drop');
+  const extracted = { ...output, dropStart: '11:30', dropEnd: '12:30', dropEvidence: notice.notes };
+  const draft = await analyzeMove(notice, env, request(extracted));
+  assert.equal(draft.dropStart, '11:30');
+  assert.equal(draft.dropEnd, '12:30');
+  assert.equal(draft.dropEvidence, notice.notes);
+  assert.equal(draft.pickupStart, null);
+  assert.deepEqual(draft.items, []);
+  const unsupported = await analyzeMove(notice, env, request({ ...extracted, dropEnd: '13:30' }));
+  assert.equal(unsupported.dropStart, null);
+  assert.equal(unsupported.dropEnd, null);
+  assert.equal(unsupported.dropEvidence, null);
+});

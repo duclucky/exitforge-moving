@@ -1,3 +1,5 @@
+import { quoteSettlement } from '../shared/payments.js';
+
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const recipientFor=(env,provider)=>env[`PAYPAL_${provider.toUpperCase()}_RECIPIENT`];
 const rowFor=(db,id)=>db.prepare('SELECT * FROM provider_settlements WHERE hold_id=?').get(id);
@@ -5,7 +7,9 @@ const rowFor=(db,id)=>db.prepare('SELECT * FROM provider_settlements WHERE hold_
 export function payoutFor(db,hold,env={}){
   const quote=JSON.parse(hold.snapshot),row=rowFor(db,hold.id),full=db.prepare('SELECT balance_paid FROM fulfillments WHERE hold_id=?').get(hold.id)?.balance_paid;
   const configured=Boolean(row?.receiver||recipientFor(env,quote.provider));
-  return{status:row?.status||(full?(configured?'READY':'NOT_CONFIGURED'):'NOT_READY'),configured,received:row?.status==='SUCCESS',amount:row?row.amount_cents/100:quote.price,platformFee:0,currency:'USD',environment:'PayPal Sandbox',batchId:row?.batch_id||null,itemId:row?.item_id||null,transactionId:row?.transaction_id||null,lastError:row?.last_error||'',updatedAt:row?.updated_at||null};
+  const settlement = quoteSettlement(quote);
+  const amountCents = row?.amount_cents ?? settlement.payoutCents;
+  return{status:row?.status||(full?(configured?'READY':'NOT_CONFIGURED'):'NOT_READY'),configured,received:row?.status==='SUCCESS',amount:amountCents/100,grossAmount:settlement.totalCents/100,platformFee:(settlement.totalCents-amountCents)/100,currency:'USD',environment:'PayPal Sandbox',batchId:row?.batch_id||null,itemId:row?.item_id||null,transactionId:row?.transaction_id||null,lastError:row?.last_error||'',updatedAt:row?.updated_at||null};
 }
 
 export function registerPayout(app,{db,paypal,atomic,env}){
@@ -39,10 +43,12 @@ export function registerPayout(app,{db,paypal,atomic,env}){
     eligible(hold);let row=rowFor(db,hold.id);
     if(row?.batch_id)return apply(hold,row,await paypal.getPayout(row.batch_id));
     if(!row){
-      const provider=JSON.parse(hold.snapshot).provider,receiver=recipientFor(env,provider);
+      const quote = JSON.parse(hold.snapshot);
+      const provider = quote.provider;
+      const receiver = recipientFor(env, provider);
       if(!receiver)throw fail('A dedicated PayPal Sandbox recipient has not been configured for this mover.',503);
       if(!/^[A-Z0-9]{10,20}$/.test(receiver))throw fail('The configured Sandbox recipient ID is invalid.',503);
-      const amount=Math.round(JSON.parse(hold.snapshot).price*100),now=new Date().toISOString();
+      const amount=quoteSettlement(quote).payoutCents,now=new Date().toISOString();
       atomic(()=>{db.prepare("INSERT OR IGNORE INTO provider_settlements(hold_id,provider,receiver,amount_cents,batch_key,item_key,status,created_at,updated_at) VALUES (?,?,?,?,?,?,'SUBMITTING',?,?)").run(hold.id,provider,receiver,amount,hold.id,'move-'+hold.id,now,now);recordEvent(hold,'provider_payout_requested');});
       row=rowFor(db,hold.id);
     }
