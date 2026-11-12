@@ -1,0 +1,20 @@
+import React,{useEffect,useState} from 'react';
+import {Wallet,CheckCircle2,RefreshCw,ArrowUpRight} from 'lucide-react';
+import {Button,Tag} from './ui';
+import {api} from './api';
+import {money} from '../shared/schedule';
+
+const pending=['SUBMITTING','PENDING','PROCESSING','ONHOLD'];
+const titles={READY:'Ready to pay your moving team',NOT_CONFIGURED:'Mover payout is not configured',SUBMITTING:'Payout submission in progress',PENDING:'PayPal is processing the crew payment',PROCESSING:'PayPal is processing the crew payment',SUCCESS:'Moving team payment received',UNCLAIMED:'Payout has not been claimed',ONHOLD:'PayPal is reviewing the payout',UNCERTAIN:'Payout submission needs a status check',FAILED:'Payout failed · review required',DENIED:'Payout denied · review required',BLOCKED:'Payout blocked · review required',CANCELED:'Payout cancelled · review required',RETURNED:'Payout returned · review required',REFUNDED:'Payout refunded',REVERSED:'Payout reversed · review required'};
+export default function PayoutPanel({hold,provider,onChange,onToast}){
+  const p=hold.fulfillment?.payout;
+  const [busy,setBusy]=useState(false),[error,setError]=useState('');
+  useEffect(()=>{
+    if(!p?.batchId||!pending.includes(p.status))return;
+    const timer=setInterval(async()=>{try{await api(`/holds/${hold.id}/payout/check`,{});await onChange();}catch(e){setError(e.message);}},5000);
+    return()=>clearInterval(timer);
+  },[hold.id,p?.batchId,p?.status]);
+  if(!p||p.status==='NOT_READY')return null;
+  async function update(submit){setBusy(true);setError('');try{const result=await api(`/holds/${hold.id}/payout${submit?'':'/check'}`,{});await onChange();onToast(result.received?'PayPal verified that the moving team received its Sandbox payment.':'Payout status saved. Pending does not mean the team has received the money yet.');}catch(e){setError(e.message);}finally{setBusy(false);}}
+  return <section className="provider-payout" aria-label="Moving team payout"><div className="payout-title">{p.received?<CheckCircle2 size={23}/>:<Wallet size={23}/>}<div><h4>{titles[p.status]||'Review crew payment status'}</h4><p>Customer paid in full. Crew settlement is tracked separately.</p></div><Tag tone={p.received?'green':'amber'}>{p.status.replaceAll('_',' ')}</Tag></div><dl><div><dt>Agreed team payment</dt><dd>{money(p.amount)}</dd></div><div><dt>Platform commission · demo</dt><dd>{money(p.platformFee)}</dd></div></dl>{p.received?<p className="payout-success">PayPal confirmed the money was credited to the configured moving-team Sandbox account.</p>:<p className="work-copy">{p.status==='NOT_CONFIGURED'?'A dedicated recipient must be configured on the server for this mover before payment can be sent.':p.status==='READY'?(provider?'Request the agreed payment to your dedicated Sandbox account. The platform sends test money; the customer is not charged again.':'Your selected moving team can request its payment to the dedicated Sandbox account. You will not be charged again.'):'PayPal may take a few minutes to process a payout. Status checks reuse the same batch and do not send another payment. Failed or unclaimed payouts require review.'}</p>}<div className="work-buttons">{provider&&p.configured&&!p.batchId&&<Button onClick={()=>update(true)} busy={busy}><Wallet size={17}/>{p.status==='UNCERTAIN'?'Retry original payout request':`Receive ${money(p.amount)} Sandbox payment`}</Button>}{p.batchId&&<Button variant="secondary" onClick={()=>update(false)} busy={busy}><RefreshCw size={17}/>Check crew payment</Button>}{provider&&<a className="button ghost" href="https://www.sandbox.paypal.com/" target="_blank" rel="noreferrer">Open PayPal Sandbox <ArrowUpRight size={16}/></a>}</div>{p.transactionId&&<p className="payout-reference">PayPal transaction: {p.transactionId}</p>}{error&&<p className="alert error" role="alert">{error}</p>}<p className="notice">Sandbox test money only. This demo sends the full agreed quote; PayPal fees are separate. This is not an escrow account or live seller onboarding.</p></section>;
+}
