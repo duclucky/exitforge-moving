@@ -45,6 +45,8 @@ Store API secrets in the server environment or the ignored `.env`. Vite embeds `
 
 When building access changes after booking, the customer can paste a notice, review the quoted text, and apply the detected hours before confirming. The mover can search for available starts using the originally booked truck and crew.
 
+Movers choose a 1 to 168 hour minimum notice when quoting, with 24 hours as the default. Customers see the deadline before paying a deposit. The deadline is based on the original booked start. A request submitted in time can still be reviewed afterward.
+
 ## Platform fee
 
 New quotes default to a 0.5% platform fee. Set `PLATFORM_FEE_BPS` to change the rate for new quotes. The fee is deducted from the crew payout, and the customer pays the quoted total. Quotes record the fee in cents. Historical quotes without a recorded fee pay the full amount.

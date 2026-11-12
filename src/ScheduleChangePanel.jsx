@@ -3,7 +3,7 @@ import { CalendarClock } from 'lucide-react';
 import { Button, Field, Tag } from './ui';
 import { api } from './api';
 import AccessNotice from './AccessNotice';
-import { clock, money, planMove } from '../shared/schedule';
+import { clock, money, planMove, rescheduleDeadline, formatRescheduleDeadline } from '../shared/schedule';
 
 const accessFields = [
   ['pickupStart', 'Pickup opens'], ['pickupEnd', 'Pickup closes'],
@@ -24,6 +24,8 @@ function AccessSummary({ title, job, plan }) {
 export default function ScheduleChangePanel({ hold, job, provider, canAnalyze, onChange, onToast, renderTimeline }) {
   const { schedule, scheduleChange: change, scheduleChangePending: pending, deposit } = hold.fulfillment;
   const quote = JSON.parse(hold.snapshot);
+  const deadline = rescheduleDeadline(job.date, quote);
+  const canRequest = deadline === null || Date.now() < deadline;
   const [editing, setEditing] = useState(false);
   const [windows, setWindows] = useState(() => Object.fromEntries(accessFields.map(([key]) => [
     key, (pending ? change.windows : job)[key] || '',
@@ -86,6 +88,11 @@ export default function ScheduleChangePanel({ hold, job, provider, canAnalyze, o
       <h4>{pending ? 'Building access changed' : schedule ? 'New schedule confirmed' : 'Need to change building access?'}</h4>
       {pending && <Tag tone="amber">{change.status === 'proposed' ? 'Customer approval needed' : 'Mover proposal needed'}</Tag>}
     </div>
+    {!provider && deadline !== null && <p>
+      {canRequest ? 'Request schedule changes before ' : 'The deadline to request changes was '}
+      <strong>{formatRescheduleDeadline(deadline)}</strong>.
+      {!canRequest && pending && ' Your existing request can still be reviewed.'}
+    </p>}
     {pending ? <>
       <p>The current truck and crew stay reserved until the customer approves a new schedule. The {money(deposit)} deposit still applies.</p>
       <div className="schedule-change-comparison">
@@ -118,15 +125,15 @@ export default function ScheduleChangePanel({ hold, job, provider, canAnalyze, o
         : <p role="status">{availability.message}</p>)}
     </form>}
 
-    {!provider && !editing && <div className="work-buttons">
+    {!provider && (!editing || !canRequest) && (canRequest || change?.status === 'proposed') && <div className="work-buttons">
       {change?.status === 'proposed' && <Button type="button" busy={busy} onClick={() =>
         send('approve', { id: change.id, version: change.version }, 'New schedule confirmed. Your deposit still applies.')
       }>Approve new schedule</Button>}
-      <Button type="button" variant="secondary" disabled={busy} onClick={() => setEditing(true)}>
+      {canRequest && <Button type="button" variant="secondary" disabled={busy} onClick={() => setEditing(true)}>
         {pending ? 'Update building hours' : 'Report changed access'}
-      </Button>
+      </Button>}
     </div>}
-    {!provider && editing && <form className="schedule-change-form" onSubmit={event => {
+    {!provider && editing && canRequest && <form className="schedule-change-form" onSubmit={event => {
       event.preventDefault();
       if (confirmed) send('request', { ...windows, note, confirmed, expectedChangeId: change?.id ?? null }, 'Updated building hours sent to your mover.');
     }}>

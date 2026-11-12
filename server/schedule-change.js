@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { clock, diagnosePlans, planMove, resourceConflicts, suggestPlans, todayInZone } from '../shared/schedule.js';
+import { clock, diagnosePlans, planMove, resourceConflicts, suggestPlans, todayInZone, rescheduleDeadline, formatRescheduleDeadline } from '../shared/schedule.js';
 
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 const windowsSchema = z.object({ pickupStart: time, pickupEnd: time, dropStart: time, dropEnd: time });
@@ -70,12 +70,18 @@ export function registerScheduleChanges(app, { db, authorized, atomic, job, allo
     }
     atomic(() => {
       requireScheduled(hold);
-      if (Date.parse(job(hold.job).date + 'T20:00:00+07:00') <= Date.now()) {
+      const { date } = job(hold.job);
+      const now = Date.now();
+      if (Date.parse(date + 'T20:00:00+07:00') <= now) {
         throw conflict('The booked day has passed. Contact your mover to agree on a new date.');
       }
       const current = latestChange(db, hold.id);
       const serialized = JSON.stringify(windows);
       if (current?.status !== 'approved' && current?.windows === serialized && current.note === note) return;
+      const deadline = rescheduleDeadline(date, JSON.parse(hold.snapshot));
+      if (deadline !== null && now >= deadline) {
+        throw conflict(`The deadline to request a schedule change was ${formatRescheduleDeadline(deadline)}.`);
+      }
       if ((current?.id ?? null) !== expectedChangeId) {
         throw conflict('The schedule request changed. Reopen the move to review the latest version.');
       }

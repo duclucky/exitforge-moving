@@ -2,6 +2,20 @@ const SHIFT_START = 360;
 const SHIFT_END = 1200;
 const ACCESS_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const ACCESS_FIELDS = ['pickupStart', 'pickupEnd', 'dropStart', 'dropEnd'];
+export const DEFAULT_RESCHEDULE_NOTICE_HOURS = 24;
+const deadlineFormat = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Ho_Chi_Minh', dateStyle: 'medium', timeStyle: 'short', hourCycle: 'h23',
+});
+
+export function rescheduleDeadline(date, quote) {
+  if (!Number.isInteger(quote?.rescheduleNoticeHours) || quote.rescheduleNoticeHours < 1) return null;
+  const start = Date.parse(date + 'T' + quote.start + ':00+07:00');
+  return Number.isFinite(start) ? start - quote.rescheduleNoticeHours * 3600000 : null;
+}
+
+export function formatRescheduleDeadline(deadline) {
+  return deadlineFormat.format(deadline) + ' GMT+7';
+}
 
 export const clock = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 export const money = value => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: Number.isInteger(value) ? 0 : 2, maximumFractionDigits: 2 }).format(value);

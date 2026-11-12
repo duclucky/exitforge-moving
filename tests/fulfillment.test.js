@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createApp } from '../server/app.js';
 import { PayPal } from '../server/paypal.js';
 
-async function fixture(t){
+async function fixture(t,{noticeHours}={}){
   const orders=new Map();let balanceCaptures=0,sequence=0;
   const payment={configured:true,
     async create(h,q){return this.order(h.id,q.deposit,'deposit');},
@@ -18,7 +18,7 @@ async function fixture(t){
   function client(){let cookie='';return async(path,body)=>{const response=await fetch(base+'/api'+path,{headers:{'Content-Type':'application/json',Cookie:cookie},...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)})});if(response.headers.get('set-cookie'))cookie=response.headers.get('set-cookie').split(';')[0];return{status:response.status,headers:response.headers,data:await response.json()};};}
   const customer=client(),provider=client(),other=client();
   for(const [request,userId] of [[customer,'customer'],[provider,'goodmove'],[other,'citycrew']])await request('/demo-session',{userId});
-  await provider('/jobs/move-101/offers',{price:181,start:'09:00',loadMinutes:60,travelMinutes:45,unloadMinutes:60,resources:['gm-truck-1','gm-1','gm-2'],note:'Reviewed service estimate for this test moving job.'});
+  await provider('/jobs/move-101/offers',{price:181,start:'09:00',rescheduleNoticeHours:noticeHours,loadMinutes:60,travelMinutes:45,unloadMinutes:60,resources:['gm-truck-1','gm-1','gm-2'],note:'Reviewed service estimate for this test moving job.'});
   const h=(await customer('/offers/offer-gm-101/reserve',{})).data;
   await customer('/holds/'+h.id+'/paypal-order',{});await customer('/holds/'+h.id+'/capture',{});
   const path='/holds/'+h.id;
@@ -191,4 +191,28 @@ test('reschedule suggestions honor the current crew and include a feasible minut
   const blocked = await f.provider(url + '/suggestions', request);
   assert.deepEqual(blocked.data.options, []);
   assert.equal(blocked.data.reason, 'resources');
+});
+
+test('the mover sets the request deadline and the customer cannot replace it after booking', async t => {
+  const f = await fixture(t,{noticeHours:36});
+  const workspace = (await f.customer('/workspace')).data;
+  const job = workspace.jobs.find(job => job.id === f.h.job);
+  const deadline = Date.parse(job.date+'T09:00:00+07:00') - 36*3600000;
+  assert.equal(JSON.parse(f.h.snapshot).rescheduleNoticeHours,36);
+  const path = f.path + '/schedule-change';
+  const now = t.mock.method(Date,'now',() => deadline);
+  const late = await f.customer(path+'/request',{...revisedAccess,rescheduleNoticeHours:1});
+  assert.equal(late.status,409);
+  assert.match(late.data.error,/deadline/i);
+  now.mock.mockImplementation(() => deadline-1);
+  const first = await f.customer(path+'/request',revisedAccess);
+  assert.equal(first.status,200);
+  now.mock.mockImplementation(() => deadline+1);
+  assert.equal((await f.customer(path+'/request',{...revisedAccess,expectedChangeId:first.data.scheduleChange.id,dropEnd:'12:45'})).status,409);
+  const proposal = await f.provider(path+'/propose',{id:first.data.scheduleChange.id,version:first.data.scheduleChange.version,start:'09:15'});
+  assert.equal(proposal.status,200);
+  const approved = await f.customer(path+'/approve',{id:proposal.data.scheduleChange.id,version:proposal.data.scheduleChange.version});
+  assert.equal(approved.status,200);
+  assert.equal(approved.data.schedule.start,'09:15');
+  assert.equal((await f.customer(path+'/request',{...revisedAccess,expectedChangeId:proposal.data.scheduleChange.id,dropEnd:'12:45'})).status,409);
 });

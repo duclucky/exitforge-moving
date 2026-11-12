@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { openDatabase, seed, users, resources } from './data.js';
-import { planMove, resourceConflicts, minutes, todayInZone, isMoveDate, suggestPlans, diagnosePlans } from '../shared/schedule.js';
+import { planMove, resourceConflicts, minutes, todayInZone, isMoveDate, suggestPlans, diagnosePlans, DEFAULT_RESCHEDULE_NOTICE_HOURS } from '../shared/schedule.js';
 import { analyzeMove, surveyInput } from './survey.js';
 import { platformFeeFor } from '../shared/payments.js';
 import { PayPal } from './paypal.js';
@@ -23,6 +23,7 @@ const jobSchema = z.object({
 }).refine(j => ['pickupStart','pickupEnd','dropStart','dropEnd'].every(k=>time.safeParse(j[k]).success) && minutes(j.pickupStart) < minutes(j.pickupEnd) && minutes(j.dropStart) < minutes(j.dropEnd), 'Access windows must end after they start.');
 const offerSchema = z.object({
   price: z.number().int().min(20).max(10000), start: time,
+  rescheduleNoticeHours: z.number().int().min(1).max(168).default(DEFAULT_RESCHEDULE_NOTICE_HOURS),
   loadMinutes: z.number().int().min(15).max(240), travelMinutes: z.number().int().min(5).max(240), unloadMinutes: z.number().int().min(15).max(240),
   resources: z.array(z.string()).min(2).max(8), note: z.string().trim().min(10).max(1200),
 });
