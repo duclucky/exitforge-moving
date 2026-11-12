@@ -1,5 +1,5 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {ArrowRight,MessageCircle,Send,CheckCircle2,Clock3,Truck,FileText,AlertCircle} from 'lucide-react';
+import {ArrowRight,MessageCircle,Send,CheckCircle2,Clock3,Truck,FileText} from 'lucide-react';
 import {Button,Field,Tag} from './ui';
 import {api} from './api';
 import {money} from '../shared/schedule';

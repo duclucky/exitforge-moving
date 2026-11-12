@@ -15,6 +15,6 @@ Open https://exitforge.site. The hosted demo uses shared fictional workspaces. U
 3. Switch to Alex Morgan and choose the crew. ExitForge holds the selected resources for ten minutes. Continue to PayPal Sandbox and use a PayPal Sandbox buyer account to approve the $36 test deposit. If access is needed, create a free Personal Sandbox account in the [PayPal Developer Sandbox Accounts dashboard](https://developer.paypal.com/dashboard/accounts). The recorded demo job and its receipts can be inspected without a Sandbox login.
 4. Switch to GoodMove, start the job, and write a fictional completion report. Switch back to Alex, review it, and accept. The remaining $144 becomes payable.
 5. As GoodMove, select **Create payment QR**. Open the link on a separate device or in a browser without the workspace session. Approve through PayPal Sandbox. After capture, the payment page and mover workspace show $0 outstanding. The same order is reused when checkout is retried.
-6. For a GoodMove job with both captures verified, use **Receive Sandbox payment**, then check the batch. The crew is credited only after PayPal confirms the payout item succeeded.
+6. For a GoodMove job with both captures verified, use **Receive $180 Sandbox payment**, then select **Check crew payment**. The crew is credited only after PayPal confirms the payout item succeeded.
 
 The hosted demo already has the AI and merchant integrations configured. Use the repository README if you want to run your own copy. Please use test funds and sample data throughout.

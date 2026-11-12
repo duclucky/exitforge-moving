@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createApp} from '../server/app.js';
-import {planMove,resourceConflicts,suggestPlans,todayInZone} from '../shared/schedule.js';
+import {planMove,resourceConflicts,suggestPlans} from '../shared/schedule.js';
 
 async function fixture(t){
   let sequence=0,captures=0;const orders=new Map();
